@@ -55,8 +55,17 @@ splash_damage_options = {
   ["rocket_multiplier"] = 1.3, --multiplied by the explTable value for rockets
 }
 
-local script_enable = 1
-refreshRate = 0.1
+-- Add an attenuation factor for blast wave
+local ATTENUATION_FACTOR = 1.1 
+
+-- Constants for fragmentation
+FRAGMENT_BASE_COUNT = 5
+FRAGMENT_COUNT = 10 -- Base value of number of fragments generated per explosion (this can be adjusted based on explosion size)
+FRAGMENT_MAX_DISTANCE = 50 -- Maximum distance a fragment can travel
+FRAGMENT_MIN_SPEED = 300 -- Minimum speed of a fragment in m/s
+FRAGMENT_MAX_SPEED = 600 -- Maximum speed of a fragment in m/s
+FRAGMENT_DAMAGE = 1 -- Damage capability of a fragment (can be adjusted)
+LOCAL_FACTOR = 0.5
 
 ----[[ ##### End of SCRIPT CONFIGURATION ##### ]]----
 
@@ -331,10 +340,16 @@ end
 
 
 function explodeObject(table)
-  local point = table[1]
-  local distance = table[2]
-  local power = table[3]
-  trigger.action.explosion(point, power) 
+    local point = table[1]
+    local distance = table[2]
+    local power = table[3]
+    
+    trigger.action.explosion(point, power)
+    
+    -- Simulate fragmentation effects if the explosion's power is above a certain threshold
+    if power > 50 then -- This threshold can be adjusted
+        simulateFragments(point, power)
+    end
 end
 
 function getWeaponExplosive(name)
@@ -403,7 +418,7 @@ function blastWave(_point, _radius, weapon, power)
     if splash_damage_options.wave_explosions == true then
       local obj = foundObject
       local obj_location = obj:getPoint()
-      local distance = getDistance(_point, obj_location)
+      local distance = getDistance3D(_point, obj_location)  -- Incorporate height in damage calculation
       local timing = distance/500      
       if obj:isExist() then
         
@@ -418,10 +433,11 @@ function blastWave(_point, _radius, weapon, power)
             _depth = length
           end
           local surface_distance = distance - _depth/2 
-          local scaled_power_factor = 0.006 * power + 1 --this could be reduced into the calc on the next line
-          local intensity = (power * scaled_power_factor) / (4 * 3.14 * surface_distance * surface_distance )
-          local surface_area = _length * height --Ideally we should roughly calculate the surface area facing the blast point, but we'll just find the largest side of the object for now
-          local damage_for_surface = intensity * surface_area    
+          local scaled_power_factor = 0.006 * power + 1
+          local intensity = (power * scaled_power_factor) / (4 * 3.14 * surface_distance * surface_distance * ATTENUATION_FACTOR)  -- Apply attenuation
+          local surface_area = _length * height * getEffectiveSurfaceAreaFromAngle(_point, obj_location) -- Use effective surface area
+          local damage_for_surface = intensity * surface_area
+ 
           --debugMsg(obj:getTypeName().." sa:"..surface_area.." distance:"..surface_distance.." dfs:"..damage_for_surface)
           if damage_for_surface > splash_damage_options.cascade_damage_threshold then
             local explosion_size = damage_for_surface
@@ -456,6 +472,65 @@ function blastWave(_point, _radius, weapon, power)
 end
 
 
+-- Calculate effective surface area based on the angle of the blast
+function getEffectiveSurfaceAreaFromAngle(blastPoint, objPoint)
+  -- Calculate the angle between the explosion and the object
+  local angle = math.atan2(objPoint.z - blastPoint.z, objPoint.x - blastPoint.x)
+  local effectiveSurfaceAreaFactor = math.abs(math.cos(angle))
+  
+  return effectiveSurfaceAreaFactor
+end
+
+
+-- Generates a random direction in 3D space
+local function randomDirection()
+    local theta = math.random() * 2 * math.pi
+    local phi = math.acos(2 * math.random() - 1)
+    local x = math.sin(phi) * math.cos(theta)
+    local y = math.sin(phi) * math.sin(theta)
+    local z = math.cos(phi)
+    return { x = x, y = y, z = z }
+end
+
+local script_enable = 1
+refreshRate = 0.1
+
+-- Simulate the fragmentation effects
+local function simulateFragments(origin, power)
+    local FRAGMENT_COUNT = getFragmentCount(power)
+    for i = 1, FRAGMENT_COUNT do
+        local fragmentDirection = randomDirection()
+        local fragmentSpeed = FRAGMENT_MIN_SPEED + math.random() * (FRAGMENT_MAX_SPEED - FRAGMENT_MIN_SPEED)
+        local distanceTravelled = 0
+        local position = origin
+
+        while distanceTravelled < FRAGMENT_MAX_DISTANCE do
+            local stepDistance = 1 -- You can adjust this to increase/decrease the resolution of the simulation
+            position = {
+                x = position.x + fragmentDirection.x * stepDistance,
+                y = position.y + fragmentDirection.y * stepDistance,
+                z = position.z + fragmentDirection.z * stepDistance
+            }
+            distanceTravelled = distanceTravelled + stepDistance
+
+            -- Check for units in the vicinity of the fragment's position and apply damage
+            local units = mist.getUnitsInZones({position}, {radius = 1}) -- Adjust the radius if needed
+            for _, unit in ipairs(units) do
+                if unit:isExist() then
+                    local fragmentImpactDamage = FRAGMENT_DAMAGE / (1 + distanceTravelled) -- This is a basic formula; can be made more complex
+                    unit:hit(fragmentImpactDamage)
+                end
+            end
+
+            fragmentSpeed = fragmentSpeed - 10 -- Reduce fragment speed due to air resistance (this is a basic simulation)
+            if fragmentSpeed <= 0 then
+                break
+            end
+        end
+    end
+end
+
+
 
 if (script_enable == 1) then
   gameMsg("SPLASH DAMAGE 2 SCRIPT RUNNING")
@@ -469,4 +544,9 @@ if (script_enable == 1) then
   )
   world.addEventHandler(WpnHandler)
 end
+
+function getFragmentCount(power)
+    return FRAGMENT_BASE_COUNT + (power * LOCAL_FACTOR)
+end
+
 
